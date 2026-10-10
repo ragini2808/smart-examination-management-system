@@ -141,13 +141,31 @@ def validate_exam_data(
                     f"exam {exam.exam_id}: semester mismatch."
                 )
 
+    
     for room in rooms:
         if room.capacity <= 0:
             errors.append(
                 f"Room {room.room_id} must have positive capacity."
             )
 
+    # Check whether total room capacity can accommodate each exam.
+    total_room_capacity = sum(
+        room.capacity for room in rooms
+        if room.capacity > 0
+    )
+
+    for exam in exams:
+        student_count = len(set(exam.enrolled_student_ids))
+
+        if student_count > total_room_capacity:
+            errors.append(
+                f"Exam {exam.exam_id} has {student_count} enrolled "
+                f"students, but the total capacity of all rooms is "
+                f"only {total_room_capacity}."
+            )
+
     return errors
 
+        
 
 

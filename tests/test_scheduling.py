@@ -389,6 +389,130 @@ class TestSchedulingAgent(unittest.TestCase):
         self.assertEqual(assigned_dates["E3"], "2026-11-02")
 
 
+    
+    def test_infeasible_schedule_has_helpful_error(self):
+        exams = [
+            Exam("E1", "Math", ["S1"], 60),
+            Exam("E2", "DBMS", ["S1"], 60),
+            Exam("E3", "AI", ["S1"], 60),
+        ]
+
+        result = run_scheduling_agent(
+            exams,
+            self.students,
+            self.slots,
+            self.rooms,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["assignments"], [])
+        self.assertTrue(result["errors"])
+
+        self.assertIn(
+            "could not find a valid timetable",
+            " ".join(result["errors"]).lower(),
+        )
+
+
+    
+    def test_insufficient_total_room_capacity(self):
+        students = [
+            Student("S1", "CSE", 3),
+            Student("S2", "CSE", 3),
+            Student("S3", "CSE", 3),
+        ]
+
+        exams = [
+            Exam("E1", "Math", ["S1", "S2", "S3"], 60),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "11:00"),
+        ]
+
+        rooms = [
+            Room("R1", "Room 101", 1),
+            Room("R2", "Room 102", 1),
+        ]
+
+        result = run_scheduling_agent(
+            exams, students, slots, rooms
+        )
+
+        self.assertFalse(result["success"])
+        self.assertTrue(
+            any(
+                "total capacity" in error.lower()
+                for error in result["errors"]
+            ),
+            result["errors"],
+        )
+
+    
+    def test_scheduler_uses_alternative_available_room(self):
+        exams = [
+            Exam("E1", "Math", ["S1"], 60),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "10:00"),
+        ]
+
+        rooms = [
+            Room("R1", "Room 101", 10, ["T1"]),
+            Room("R2", "Room 102", 10),
+        ]
+
+        result = run_scheduling_agent(
+            exams, self.students, slots, rooms
+        )
+
+        self.assertTrue(result["success"], result["errors"])
+        self.assertEqual(len(result["assignments"]), 1)
+        self.assertNotIn(
+            "R1", result["assignments"][0].room_ids
+        )
+        self.assertIn(
+            "R2", result["assignments"][0].room_ids
+        )
+
+
+    
+    def test_same_room_not_double_booked(self):
+        exams = [
+            Exam("E1", "Math", ["S1"], 60),
+            Exam("E2", "DBMS", ["S2"], 60),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "10:00"),
+            TimeSlot("T2", "2026-11-01", "11:00", "12:00"),
+        ]
+
+        rooms = [
+            Room("R1", "Room 101", 10),
+        ]
+
+        result = run_scheduling_agent(
+            exams, self.students, slots, rooms
+        )
+
+        self.assertTrue(result["success"], result["errors"])
+
+        room_slot_pairs = [
+            (room_id, assignment.slot_id)
+            for assignment in result["assignments"]
+            for room_id in assignment.room_ids
+        ]
+
+        self.assertEqual(
+            len(room_slot_pairs),
+            len(set(room_slot_pairs)),
+            "A room was assigned to multiple exams in the same slot.",
+        )
+
+
+
 
 
 if __name__ == "__main__":

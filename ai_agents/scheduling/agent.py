@@ -52,15 +52,26 @@ def run_scheduling_agent(
         rules=rules,
     )
 
+    
     if assignments is None:
         return {
             "success": False,
-            "message": "No feasible timetable exists.",
+            "message": (
+                "No feasible timetable could be generated "
+                "with the current inputs and scheduling rules."
+            ),
             "assignments": [],
             "errors": [
-                "Scheduling constraints could not be satisfied."
+                "The scheduling solver could not find a valid "
+                "timetable satisfying all constraints.",
+                "Review the available time slots, room capacities, "
+                "room availability, student conflicts, daily exam "
+                "limits, and ESE gap requirements.",
+                "Try adding more time slots or suitable rooms, "
+                "or review the scheduling rules if permitted."
             ],
         }
+
 
     print("Agent: Timetable generated. Validating...")
 
