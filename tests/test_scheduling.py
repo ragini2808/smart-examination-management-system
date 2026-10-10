@@ -524,10 +524,12 @@ class TestSchedulingAgent(unittest.TestCase):
             msg=f"Expected a slot-duration diagnostic. Got: {result['errors']}",
         )
 
+
     
     def test_scheduler_rejects_incomplete_exam_eligibility(self):
         exam = Exam(
             exam_id="E_INCOMPLETE",
+            subject="Mathematics",
             enrolled_student_ids=["S1"],
             duration_minutes=60,
             eligible_department="CSE",
@@ -536,13 +538,14 @@ class TestSchedulingAgent(unittest.TestCase):
 
         result = generate_schedule(
             exams=[exam],
-            time_slots=self.time_slots,
+            time_slots=self.slots,
             rooms=self.rooms,
             students=self.students,
-            )
+    )
 
         self.assertIsNone(result)
 
+    
 
 
 if __name__ == "__main__":
