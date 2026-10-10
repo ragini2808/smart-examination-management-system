@@ -141,14 +141,13 @@ def validate_exam_data(
                     f"exam {exam.exam_id}: semester mismatch."
                 )
 
-    
     for room in rooms:
         if room.capacity <= 0:
             errors.append(
                 f"Room {room.room_id} must have positive capacity."
             )
 
-    # Check whether total room capacity can accommodate each exam.
+    # Check whether combined room capacity can accommodate each exam.
     total_room_capacity = sum(
         room.capacity for room in rooms
         if room.capacity > 0
@@ -165,6 +164,94 @@ def validate_exam_data(
             )
 
     return errors
+
+
+def diagnose_scheduling_inputs(
+    exams: list[Exam],
+    students: list[Student],
+    time_slots: list[TimeSlot],
+    rooms: list[Room],
+) -> list[str]:
+    """Identify common input problems that can prevent scheduling."""
+
+    suggestions = []
+
+    student_by_id = {
+        student.student_id: student
+        for student in students
+    }
+
+    total_room_capacity = sum(
+        room.capacity for room in rooms
+        if room.capacity > 0
+    )
+
+    if exams and not time_slots:
+        suggestions.append(
+            "No time slots are available. Add valid exam time slots."
+        )
+
+    if exams and not rooms:
+        suggestions.append(
+            "No rooms are available. Add suitable examination rooms."
+        )
+
+    # Check each exam for common input problems.
+    for exam in exams:
+        enrolled_count = len(set(exam.enrolled_student_ids))
+
+        if enrolled_count > total_room_capacity:
+            suggestions.append(
+                f"Exam {exam.exam_id} needs {enrolled_count} seats, "
+                f"but the combined room capacity is "
+                f"{total_room_capacity}. Add suitable rooms."
+            )
+
+        # Check whether at least one slot is long enough.
+        if exam.duration_minutes > 0 and time_slots:
+            long_enough_slots = []
+
+            for slot in time_slots:
+                try:
+                    start = datetime.strptime(
+                        slot.start_time, "%H:%M"
+                    )
+                    end = datetime.strptime(
+                        slot.end_time, "%H:%M"
+                    )
+                except ValueError:
+                    continue
+
+                duration_minutes = (
+                    end - start
+                ).total_seconds() / 60
+
+                if duration_minutes >= exam.duration_minutes:
+                    long_enough_slots.append(slot)
+
+            if not long_enough_slots:
+                suggestions.append(
+                    f"Exam {exam.exam_id} requires "
+                    f"{exam.duration_minutes} minutes, but no "
+                    f"available slot is long enough."
+                )
+
+        # Check for references to unknown students.
+        unknown_students = [
+            student_id
+            for student_id in exam.enrolled_student_ids
+            if student_id not in student_by_id
+        ]
+
+        if unknown_students:
+            suggestions.append(
+                f"Exam {exam.exam_id} references unknown students: "
+                f"{', '.join(unknown_students)}."
+            )
+
+    return suggestions
+
+
 
         
 

@@ -1,6 +1,8 @@
 
 import unittest
+from datetime import date
 
+from ai_agents.scheduling.scheduler import generate_schedule
 from ai_agents.scheduling.schemas import (
     Exam,
     Student,
@@ -97,10 +99,7 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertTrue(
-            any(
-                "overlap" in error.lower()
-                for error in result["errors"]
-            )
+            any("overlap" in error.lower() for error in result["errors"])
         )
 
     # Test 6: Multiple rooms must provide sufficient capacity.
@@ -174,8 +173,7 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertFalse(result["success"])
 
-    # Test 10: Three regular exams cannot be scheduled
-    # on the same day for the same department and semester.
+    # Test 10: At most two regular exams per department/semester/day.
     def test_regular_daily_limit(self):
         exams = [
             Exam("E1", "Math", ["S1"], 60),
@@ -195,8 +193,7 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertFalse(result["success"])
 
-    # Test 11: Two ESE exams cannot be scheduled on the
-    # same day for the same department and semester.
+    # Test 11: At most one ESE exam per department/semester/day.
     def test_ese_daily_limit(self):
         exams = [
             Exam("E1", "Math", ["S1"], 60, exam_type="ESE"),
@@ -214,7 +211,7 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertFalse(result["success"])
 
-    
+    # Test 12: ESE exams must have at least one complete day between them.
     def test_ese_gap_between_consecutive_exams(self):
         students = [
             Student("S1", "CSE", 3),
@@ -243,7 +240,6 @@ class TestSchedulingAgent(unittest.TestCase):
         ]
 
         rooms = [Room("R1", "Room 101", 10)]
-
         rules = SchedulingRules(ese_gap_days=1)
 
         result = run_scheduling_agent(
@@ -254,26 +250,20 @@ class TestSchedulingAgent(unittest.TestCase):
 
         assigned_dates = {
             assignment.exam_id: next(
-                slot.date for slot in slots
+                slot.date
+                for slot in slots
                 if slot.slot_id == assignment.slot_id
             )
             for assignment in result["assignments"]
         }
 
-        date1 = assigned_dates["E1"]
-        date2 = assigned_dates["E2"]
-
-        from datetime import date
-
-        gap = abs(
-            (date.fromisoformat(date2) -
-             date.fromisoformat(date1)).days
-        ) - 1
+        date1 = date.fromisoformat(assigned_dates["E1"])
+        date2 = date.fromisoformat(assigned_dates["E2"])
+        gap = abs((date2 - date1).days) - 1
 
         self.assertGreaterEqual(gap, 1)
 
-
-    
+    # Test 13: ESE exams must have two complete days between them.
     def test_ese_two_day_gap(self):
         students = [
             Student("S1", "CSE", 3),
@@ -320,20 +310,17 @@ class TestSchedulingAgent(unittest.TestCase):
             for assignment in result["assignments"]
         }
 
-        from datetime import date
-
         date1 = date.fromisoformat(assigned_dates["E1"])
         date2 = date.fromisoformat(assigned_dates["E2"])
-
         gap = abs((date2 - date1).days) - 1
 
         self.assertGreaterEqual(
-            gap, 2,
+            gap,
+            2,
             f"ESE exams have only {gap} complete days between them",
         )
 
-
-    
+    # Test 14: Another department can schedule an ESE during the gap.
     def test_other_department_can_use_ese_gap_day(self):
         students = [
             Student("S1", "CSE", 3),
@@ -388,8 +375,7 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertEqual(assigned_dates["E3"], "2026-11-02")
 
-
-    
+    # Test 15: An infeasible schedule returns a helpful error.
     def test_infeasible_schedule_has_helpful_error(self):
         exams = [
             Exam("E1", "Math", ["S1"], 60),
@@ -398,10 +384,7 @@ class TestSchedulingAgent(unittest.TestCase):
         ]
 
         result = run_scheduling_agent(
-            exams,
-            self.students,
-            self.slots,
-            self.rooms,
+            exams, self.students, self.slots, self.rooms
         )
 
         self.assertFalse(result["success"])
@@ -413,8 +396,7 @@ class TestSchedulingAgent(unittest.TestCase):
             " ".join(result["errors"]).lower(),
         )
 
-
-    
+    # Test 16: Insufficient combined room capacity is rejected.
     def test_insufficient_total_room_capacity(self):
         students = [
             Student("S1", "CSE", 3),
@@ -448,7 +430,7 @@ class TestSchedulingAgent(unittest.TestCase):
             result["errors"],
         )
 
-    
+    # Test 17: The scheduler uses an alternative available room.
     def test_scheduler_uses_alternative_available_room(self):
         exams = [
             Exam("E1", "Math", ["S1"], 60),
@@ -469,15 +451,10 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertTrue(result["success"], result["errors"])
         self.assertEqual(len(result["assignments"]), 1)
-        self.assertNotIn(
-            "R1", result["assignments"][0].room_ids
-        )
-        self.assertIn(
-            "R2", result["assignments"][0].room_ids
-        )
+        self.assertNotIn("R1", result["assignments"][0].room_ids)
+        self.assertIn("R2", result["assignments"][0].room_ids)
 
-
-    
+    # Test 18: A room cannot be double-booked in the same time slot.
     def test_same_room_not_double_booked(self):
         exams = [
             Exam("E1", "Math", ["S1"], 60),
@@ -511,10 +488,62 @@ class TestSchedulingAgent(unittest.TestCase):
             "A room was assigned to multiple exams in the same slot.",
         )
 
+    # Test 19: The agent explains when no slot is long enough.
+    def test_agent_returns_diagnostic_for_slot_too_short(self):
+        exam = Exam(
+            "E1",
+            "Mathematics",
+            ["S1"],
+            180,
+        )
 
+        slot = TimeSlot(
+            "T1",
+            "2026-11-01",
+            "09:00",
+            "10:00",
+        )
+
+        room = Room("R1", "Room 101", 10)
+
+        result = run_scheduling_agent(
+            exams=[exam],
+            students=self.students,
+            time_slots=[slot],
+            rooms=[room],
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["assignments"], [])
+
+        self.assertTrue(
+            any(
+                "no available slot is long enough" in error.lower()
+                for error in result["errors"]
+            ),
+            msg=f"Expected a slot-duration diagnostic. Got: {result['errors']}",
+        )
+
+    
+    def test_scheduler_rejects_incomplete_exam_eligibility(self):
+        exam = Exam(
+            exam_id="E_INCOMPLETE",
+            enrolled_student_ids=["S1"],
+            duration_minutes=60,
+            eligible_department="CSE",
+            eligible_semester=None,
+            )
+
+        result = generate_schedule(
+            exams=[exam],
+            time_slots=self.time_slots,
+            rooms=self.rooms,
+            students=self.students,
+            )
+
+        self.assertIsNone(result)
 
 
 
 if __name__ == "__main__":
     unittest.main()
-

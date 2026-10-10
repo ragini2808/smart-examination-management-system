@@ -1,4 +1,6 @@
+
 from datetime import date as calendar_date
+
 from .schemas import (
     Exam,
     Student,
@@ -7,6 +9,7 @@ from .schemas import (
     ScheduleAssignment,
     SchedulingRules,
 )
+
 from .constraints import (
     find_conflicting_exams,
     validate_time_slots,
@@ -88,6 +91,7 @@ def validate_schedule(
     # Every exam must have exactly one assignment.
     for exam_id in exam_ids:
         count = len(assignment_by_exam.get(exam_id, []))
+
         if count != 1:
             errors.append(
                 f"Exam {exam_id} must have exactly one assignment; "
@@ -104,11 +108,13 @@ def validate_schedule(
     # Validate duration, capacity, and room availability.
     for exam_id, exam_assignments in assignment_by_exam.items():
         exam = exam_by_id.get(exam_id)
+
         if exam is None:
             continue
 
         for assignment in exam_assignments:
             slot = slot_by_id.get(assignment.slot_id)
+
             if slot is None:
                 continue
 
@@ -131,12 +137,12 @@ def validate_schedule(
             ]
 
             capacity = sum(room.capacity for room in assigned_rooms)
+            student_count = len(exam.enrolled_student_ids)
 
-            if capacity < len(exam.enrolled_student_ids):
+            if capacity < student_count:
                 errors.append(
                     f"Insufficient room capacity for exam {exam_id}: "
-                    f"{capacity} seats for "
-                    f"{len(exam.enrolled_student_ids)} students."
+                    f"{capacity} seats for {student_count} students."
                 )
 
             for room in assigned_rooms:
@@ -159,7 +165,7 @@ def validate_schedule(
                         f"{exam_b_id} use the same slot."
                     )
 
-    # A room cannot be used by two exams in overlapping periods.
+    # A room cannot be used by two exams during overlapping periods.
     for i in range(len(assignments)):
         a = assignments[i]
         slot_a = slot_by_id.get(a.slot_id)
@@ -188,10 +194,10 @@ def validate_schedule(
             if start_a < end_b and start_b < end_a:
                 errors.append(
                     f"Room conflict: exams {a.exam_id} and {b.exam_id} "
-                    f"book the same room during overlapping slots."
+                    "book the same room during overlapping slots."
                 )
 
-    # Validate exam type and group assignments by department/semester/date.
+    # Validate exam type and determine department/semester groups.
     exams_by_group_and_date = {}
 
     for assignment in assignments:
@@ -211,30 +217,34 @@ def validate_schedule(
             continue
 
         groups = set()
+        department = exam.eligible_department
+        semester = exam.eligible_semester
 
-        # Use explicit eligibility when both values are supplied.
-        if (
-            exam.eligible_department is not None
-            and exam.eligible_semester is not None
-        ):
-            groups.add((
-                exam.eligible_department,
-                exam.eligible_semester,
-            ))
+        # FIX: If either eligibility field is provided, require both.
+        if department is not None or semester is not None:
+            if department is None or semester is None:
+                errors.append(
+                    f"Exam {exam.exam_id} must specify both "
+                    "eligible_department and eligible_semester."
+                )
+                continue
+
+            groups.add((department, semester))
+
         else:
-            # Otherwise infer groups from enrolled students.
+            # Infer groups only when neither explicit field is provided.
             for student_id in exam.enrolled_student_ids:
                 student = student_by_id.get(student_id)
-                if student is not None:
-                    groups.add((
-                        student.department,
-                        student.semester,
-                    ))
 
-        # An exam without an eligible group cannot be counted toward
-        # department/semester daily limits.
+                if student is not None:
+                    groups.add(
+                        (student.department, student.semester)
+                    )
+
+        # Group exams by department, semester, and date.
         for department, semester in groups:
             key = (department, semester, slot.date)
+
             exams_by_group_and_date.setdefault(
                 key, []
             ).append(exam)
@@ -247,6 +257,7 @@ def validate_schedule(
             exam.exam_type.upper() == "REGULAR"
             for exam in daily_exams
         )
+
         ese_count = sum(
             exam.exam_type.upper() == "ESE"
             for exam in daily_exams
@@ -281,8 +292,7 @@ def validate_schedule(
                 (department, semester), set()
             ).add(exam_date)
 
-    # Enforce the required number of complete calendar days without
-    # ESE papers between consecutive ESE exam dates.
+    # Enforce complete calendar days between consecutive ESE dates.
     for (department, semester), date_values in (
         ese_dates_by_group.items()
     ):
@@ -318,8 +328,11 @@ def _minutes(time_value: str) -> int | None:
 
     try:
         hour, minute = map(int, time_value.split(":"))
+
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             return None
+
         return hour * 60 + minute
+
     except (ValueError, AttributeError):
         return None
