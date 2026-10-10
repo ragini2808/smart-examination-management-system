@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass, field
 
 
@@ -17,6 +16,7 @@ class Exam:
     duration_minutes: int
     eligible_department: str | None = None
     eligible_semester: int | None = None
+    exam_type: str = "REGULAR"
 
 
 @dataclass
@@ -46,3 +46,10 @@ class ScheduleAssignment:
     exam_id: str
     slot_id: str
     room_ids: list[str]
+
+
+@dataclass
+class SchedulingRules:
+    max_regular_exams_per_day: int = 2
+    max_ese_exams_per_day: int = 1
+    ese_gap_days: int = 1

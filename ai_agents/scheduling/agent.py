@@ -1,10 +1,10 @@
-
 from .schemas import (
     Exam,
     Student,
     TimeSlot,
     Room,
     ScheduleAssignment,
+    SchedulingRules,
 )
 from .scheduler import generate_schedule
 from .validator import validate_schedule
@@ -16,15 +16,22 @@ def run_scheduling_agent(
     students: list[Student],
     time_slots: list[TimeSlot],
     rooms: list[Room],
+    rules: SchedulingRules | None = None,
 ) -> dict:
     """
     Coordinate input validation, schedule generation,
     and independent schedule validation.
+
+    Uses the same scheduling rules for generation and validation.
     """
 
     print("Agent: Starting exam scheduling...")
 
-    # Step 1: Validate the input data before scheduling.
+    # Use default rules when the caller does not provide custom rules.
+    if rules is None:
+        rules = SchedulingRules()
+
+    # Step 1: Validate input data.
     input_errors = validate_time_slots(time_slots)
     input_errors.extend(validate_exam_data(exams, students, rooms))
 
@@ -36,8 +43,14 @@ def run_scheduling_agent(
             "errors": input_errors,
         }
 
-    # Step 2: Generate a timetable.
-    assignments = generate_schedule(exams, time_slots, rooms)
+    # Step 2: Generate a timetable using student information and rules.
+    assignments = generate_schedule(
+        exams=exams,
+        time_slots=time_slots,
+        rooms=rooms,
+        students=students,
+        rules=rules,
+    )
 
     if assignments is None:
         return {
@@ -51,13 +64,14 @@ def run_scheduling_agent(
 
     print("Agent: Timetable generated. Validating...")
 
-    # Step 3: Independently validate the generated timetable.
+    # Step 3: Independently validate using the same rules.
     errors = validate_schedule(
-        exams,
-        students,
-        time_slots,
-        rooms,
-        assignments,
+        exams=exams,
+        students=students,
+        time_slots=time_slots,
+        rooms=rooms,
+        assignments=assignments,
+        rules=rules,
     )
 
     if errors:
@@ -76,4 +90,3 @@ def run_scheduling_agent(
         "assignments": assignments,
         "errors": [],
     }
-

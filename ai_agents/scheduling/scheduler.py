@@ -1,7 +1,16 @@
 
+from datetime import date as calendar_date
+
 from ortools.sat.python import cp_model
 
-from .schemas import Exam, TimeSlot, Room, ScheduleAssignment
+from .schemas import (
+    Exam,
+    Student,
+    TimeSlot,
+    Room,
+    ScheduleAssignment,
+    SchedulingRules,
+)
 from .constraints import find_conflicting_exams, validate_time_slots
 
 
@@ -9,14 +18,21 @@ def generate_schedule(
     exams: list[Exam],
     time_slots: list[TimeSlot],
     rooms: list[Room],
+    students: list[Student] | None = None,
+    rules: SchedulingRules | None = None,
 ) -> list[ScheduleAssignment] | None:
     """
-    Assign each exam to one time slot and one or more rooms.
+    Generate an exam timetable using OR-Tools CP-SAT.
 
-    The selected rooms must:
-    - Have enough total capacity for enrolled students.
-    - Be available during the selected time slot.
-    - Not be double-booked for conflicting exams.
+    Enforces:
+    - One time slot per exam.
+    - Sufficient combined room capacity.
+    - Room availability and no double booking.
+    - No same-slot conflicts between exams sharing students.
+    - Daily exam limits per department and semester.
+    - Configurable calendar-day gaps between ESE papers.
+
+    Returns None if no feasible timetable can be generated.
     """
 
     if not exams:
@@ -28,8 +44,23 @@ def generate_schedule(
     if validate_time_slots(time_slots):
         return None
 
-    # Reject exams that cannot fit into any available time slot.
+    if rules is None:
+        rules = SchedulingRules()
+
+    if (
+        rules.max_regular_exams_per_day < 0
+        or rules.max_ese_exams_per_day < 0
+        or rules.ese_gap_days < 0
+    ):
+        return None
+
+    students = students or []
+
+    # Validate exam types, durations, and available slot lengths.
     for exam in exams:
+        if exam.exam_type.upper() not in {"REGULAR", "ESE"}:
+            return None
+
         if exam.duration_minutes <= 0:
             return None
 
@@ -39,9 +70,38 @@ def generate_schedule(
         ):
             return None
 
+    # Identify each exam's department/semester groups.
+    student_by_id = {
+        student.student_id: student
+        for student in students
+    }
+
+    exam_groups: dict[int, set[tuple[str, int]]] = {}
+
+    for index, exam in enumerate(exams):
+        groups_for_exam = set()
+
+        if (
+            exam.eligible_department is not None
+            and exam.eligible_semester is not None
+        ):
+            groups_for_exam.add(
+                (exam.eligible_department, exam.eligible_semester)
+            )
+        else:
+            for student_id in exam.enrolled_student_ids:
+                student = student_by_id.get(student_id)
+
+                if student is not None:
+                    groups_for_exam.add(
+                        (student.department, student.semester)
+                    )
+
+        exam_groups[index] = groups_for_exam
+
     model = cp_model.CpModel()
 
-    # A variable indicates whether an exam uses a particular slot.
+    # assign_slot[(exam_index, slot_index)] indicates an exam's slot.
     assign_slot = {}
 
     for e, exam in enumerate(exams):
@@ -50,7 +110,6 @@ def generate_schedule(
         for s, slot in enumerate(time_slots):
             if _slot_duration(slot) >= exam.duration_minutes:
                 valid_slots.append(s)
-
                 assign_slot[(e, s)] = model.new_bool_var(
                     f"exam_{e}_slot_{s}"
                 )
@@ -62,7 +121,8 @@ def generate_schedule(
             assign_slot[(e, s)] for s in valid_slots
         )
 
-    # A variable indicates whether an exam uses a room.
+    # assign_room[(exam_index, slot_index, room_index)] indicates
+    # whether a room is used by an exam in a particular slot.
     assign_room = {}
 
     for e, exam in enumerate(exams):
@@ -78,8 +138,6 @@ def generate_schedule(
                     f"exam_{e}_slot_{s}_room_{r}"
                 )
 
-                # A room can only be assigned when the exam
-                # is scheduled in that time slot.
                 model.add(
                     assign_room[(e, s, r)] <= assign_slot[(e, s)]
                 )
@@ -90,7 +148,7 @@ def generate_schedule(
                 if (e, s, r) in assign_room
             ]
 
-            # Enough combined room capacity for enrolled students.
+            # The combined room capacity must be sufficient.
             model.add(
                 sum(
                     rooms[r].capacity * assign_room[(e, s, r)]
@@ -100,19 +158,16 @@ def generate_schedule(
                 >= len(exam.enrolled_student_ids) * assign_slot[(e, s)]
             )
 
-            # At least one room when the exam uses this slot.
-            model.add(
-                sum(room_vars) >= assign_slot[(e, s)]
-            )
+            # Every scheduled exam must use at least one room.
+            model.add(sum(room_vars) >= assign_slot[(e, s)])
 
-    # Conflicting exams cannot use the same time slot.
-    conflicts = find_conflicting_exams(exams)
-
+    # Exams sharing students cannot use the same time slot.
     exam_index = {
-        exam.exam_id: i for i, exam in enumerate(exams)
+        exam.exam_id: i
+        for i, exam in enumerate(exams)
     }
 
-    for exam_a_id, exam_b_id in conflicts:
+    for exam_a_id, exam_b_id in find_conflicting_exams(exams):
         a = exam_index[exam_a_id]
         b = exam_index[exam_b_id]
 
@@ -122,7 +177,7 @@ def generate_schedule(
                     assign_slot[(a, s)] + assign_slot[(b, s)] <= 1
                 )
 
-    # A room cannot be assigned to two exams in the same slot.
+    # A room cannot be used by multiple exams in the same slot.
     for s in range(len(time_slots)):
         for r in range(len(rooms)):
             room_usage = [
@@ -134,6 +189,98 @@ def generate_schedule(
             if room_usage:
                 model.add_at_most_one(room_usage)
 
+    # Group available slots by actual calendar date.
+    slots_by_date = {}
+
+    for s, slot in enumerate(time_slots):
+        try:
+            parsed_date = calendar_date.fromisoformat(slot.date)
+        except (ValueError, TypeError):
+            return None
+
+        slots_by_date.setdefault(parsed_date, []).append(s)
+
+    ordered_dates = sorted(slots_by_date)
+
+    # Enforce daily limits independently for each group.
+    groups = set()
+
+    for exam_group_set in exam_groups.values():
+        groups.update(exam_group_set)
+
+    for department, semester in groups:
+        group_exams = [
+            e
+            for e in range(len(exams))
+            if (department, semester) in exam_groups[e]
+        ]
+
+        for exam_date in ordered_dates:
+            slot_indices = slots_by_date[exam_date]
+
+            for exam_type, daily_limit in (
+                ("REGULAR", rules.max_regular_exams_per_day),
+                ("ESE", rules.max_ese_exams_per_day),
+            ):
+                daily_exam_vars = [
+                    assign_slot[(e, s)]
+                    for e in group_exams
+                    if exams[e].exam_type.upper() == exam_type
+                    for s in slot_indices
+                    if (e, s) in assign_slot
+                ]
+
+                if daily_exam_vars:
+                    model.add(
+                        sum(daily_exam_vars) <= daily_limit
+                    )
+
+    # ESE gap constraint:
+    # Between two ESE dates for the same group, the required
+    # number of complete calendar days must remain exam-free.
+    # Other department/semester groups are not restricted.
+    if rules.ese_gap_days > 0:
+        for department, semester in groups:
+            group_ese_exams = [
+                e
+                for e in range(len(exams))
+                if (
+                    (department, semester) in exam_groups[e]
+                    and exams[e].exam_type.upper() == "ESE"
+                )
+            ]
+
+            for i, first_date in enumerate(ordered_dates):
+                for second_date in ordered_dates[i + 1:]:
+                    complete_days_between = (
+                        second_date - first_date
+                    ).days - 1
+
+                    if complete_days_between >= rules.ese_gap_days:
+                        continue
+
+                    first_day_vars = [
+                        assign_slot[(e, s)]
+                        for e in group_ese_exams
+                        for s in slots_by_date[first_date]
+                        if (e, s) in assign_slot
+                    ]
+
+                    second_day_vars = [
+                        assign_slot[(e, s)]
+                        for e in group_ese_exams
+                        for s in slots_by_date[second_date]
+                        if (e, s) in assign_slot
+                    ]
+
+                    if first_day_vars and second_day_vars:
+                        model.add(
+                            sum(first_day_vars)
+                            + sum(second_day_vars)
+                            <= 1
+                        )
+
+    # Solve the timetable model.
     solver = cp_model.CpSolver()
     status = solver.solve(model)
 
@@ -170,7 +317,7 @@ def generate_schedule(
 
 
 def _slot_duration(slot: TimeSlot) -> int:
-    """Return the duration of a slot in minutes."""
+    """Return the duration of a time slot in minutes."""
 
     start_hour, start_minute = map(int, slot.start_time.split(":"))
     end_hour, end_minute = map(int, slot.end_time.split(":"))

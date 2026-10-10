@@ -6,6 +6,7 @@ from ai_agents.scheduling.schemas import (
     Student,
     TimeSlot,
     Room,
+    SchedulingRules,
 )
 from ai_agents.scheduling.agent import run_scheduling_agent
 
@@ -30,26 +31,23 @@ class TestSchedulingAgent(unittest.TestCase):
         ]
 
     # Test 1: A valid timetable is generated.
-    
     def test_valid_schedule(self):
         exams = [
             Exam("E1", "Math", ["S1", "S2"], 60),
             Exam("E2", "DBMS", ["S1", "S3"], 60),
             Exam("E3", "AI", ["S2", "S3"], 60),
-            ]
+        ]
 
         three_slots = self.slots + [
-            TimeSlot("T3", "2026-11-01", "15:00", "17:00")
-            ]
+            TimeSlot("T3", "2026-11-02", "09:00", "11:00")
+        ]
 
         result = run_scheduling_agent(
             exams, self.students, three_slots, self.rooms
-            )
+        )
 
         self.assertTrue(result["success"], result["errors"])
         self.assertEqual(len(result["assignments"]), 3)
-
-
 
     # Test 2: Three conflicting exams cannot fit into two slots.
     def test_impossible_schedule(self):
@@ -99,7 +97,10 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertTrue(
-            any("overlap" in error.lower() for error in result["errors"])
+            any(
+                "overlap" in error.lower()
+                for error in result["errors"]
+            )
         )
 
     # Test 6: Multiple rooms must provide sufficient capacity.
@@ -123,9 +124,7 @@ class TestSchedulingAgent(unittest.TestCase):
             TimeSlot("T1", "2026-11-01", "09:00", "09:30")
         ]
 
-        exams = [
-            Exam("E1", "Math", ["S1"], 60)
-        ]
+        exams = [Exam("E1", "Math", ["S1"], 60)]
 
         result = run_scheduling_agent(
             exams, self.students, short_slots, self.rooms
@@ -151,30 +150,243 @@ class TestSchedulingAgent(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertTrue(
-            any("department mismatch" in error.lower()
-                for error in result["errors"])
+            any(
+                "department mismatch" in error.lower()
+                for error in result["errors"]
+            )
         )
 
     # Test 9: Unavailable rooms cannot be used.
-   
     def test_room_unavailability(self):
         unavailable_rooms = [
-        Room("R1", "Room 101", 10, ["T1"]),
+            Room("R1", "Room 101", 10, ["T1"]),
         ]
 
         slots = [
             TimeSlot("T1", "2026-11-01", "09:00", "11:00")
-            ]
+        ]
 
-        exams = [
-            Exam("E1", "Math", ["S1"], 60)
-            ]
+        exams = [Exam("E1", "Math", ["S1"], 60)]
 
         result = run_scheduling_agent(
             exams, self.students, slots, unavailable_rooms
-            )
+        )
 
         self.assertFalse(result["success"])
+
+    # Test 10: Three regular exams cannot be scheduled
+    # on the same day for the same department and semester.
+    def test_regular_daily_limit(self):
+        exams = [
+            Exam("E1", "Math", ["S1"], 60),
+            Exam("E2", "DBMS", ["S2"], 60),
+            Exam("E3", "AI", ["S3"], 60),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "10:00"),
+            TimeSlot("T2", "2026-11-01", "11:00", "12:00"),
+            TimeSlot("T3", "2026-11-01", "13:00", "14:00"),
+        ]
+
+        result = run_scheduling_agent(
+            exams, self.students, slots, self.rooms
+        )
+
+        self.assertFalse(result["success"])
+
+    # Test 11: Two ESE exams cannot be scheduled on the
+    # same day for the same department and semester.
+    def test_ese_daily_limit(self):
+        exams = [
+            Exam("E1", "Math", ["S1"], 60, exam_type="ESE"),
+            Exam("E2", "DBMS", ["S2"], 60, exam_type="ESE"),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "10:00"),
+            TimeSlot("T2", "2026-11-01", "11:00", "12:00"),
+        ]
+
+        result = run_scheduling_agent(
+            exams, self.students, slots, self.rooms
+        )
+
+        self.assertFalse(result["success"])
+
+    
+    def test_ese_gap_between_consecutive_exams(self):
+        students = [
+            Student("S1", "CSE", 3),
+            Student("S2", "CSE", 3),
+        ]
+
+        exams = [
+            Exam(
+                "E1", "Math", ["S1"], 60,
+                eligible_department="CSE",
+                eligible_semester=3,
+                exam_type="ESE",
+            ),
+            Exam(
+                "E2", "DBMS", ["S2"], 60,
+                eligible_department="CSE",
+                eligible_semester=3,
+                exam_type="ESE",
+            ),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "10:00"),
+            TimeSlot("T2", "2026-11-02", "09:00", "10:00"),
+            TimeSlot("T3", "2026-11-03", "09:00", "10:00"),
+        ]
+
+        rooms = [Room("R1", "Room 101", 10)]
+
+        rules = SchedulingRules(ese_gap_days=1)
+
+        result = run_scheduling_agent(
+            exams, students, slots, rooms, rules
+        )
+
+        self.assertTrue(result["success"], result["errors"])
+
+        assigned_dates = {
+            assignment.exam_id: next(
+                slot.date for slot in slots
+                if slot.slot_id == assignment.slot_id
+            )
+            for assignment in result["assignments"]
+        }
+
+        date1 = assigned_dates["E1"]
+        date2 = assigned_dates["E2"]
+
+        from datetime import date
+
+        gap = abs(
+            (date.fromisoformat(date2) -
+             date.fromisoformat(date1)).days
+        ) - 1
+
+        self.assertGreaterEqual(gap, 1)
+
+
+    
+    def test_ese_two_day_gap(self):
+        students = [
+            Student("S1", "CSE", 3),
+            Student("S2", "CSE", 3),
+        ]
+
+        exams = [
+            Exam(
+                "E1", "Math", ["S1"], 60,
+                eligible_department="CSE",
+                eligible_semester=3,
+                exam_type="ESE",
+            ),
+            Exam(
+                "E2", "DBMS", ["S2"], 60,
+                eligible_department="CSE",
+                eligible_semester=3,
+                exam_type="ESE",
+            ),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "10:00"),
+            TimeSlot("T2", "2026-11-02", "09:00", "10:00"),
+            TimeSlot("T3", "2026-11-03", "09:00", "10:00"),
+            TimeSlot("T4", "2026-11-04", "09:00", "10:00"),
+        ]
+
+        rooms = [Room("R1", "Room 101", 10)]
+        rules = SchedulingRules(ese_gap_days=2)
+
+        result = run_scheduling_agent(
+            exams, students, slots, rooms, rules
+        )
+
+        self.assertTrue(result["success"], result["errors"])
+
+        assigned_dates = {
+            assignment.exam_id: next(
+                slot.date
+                for slot in slots
+                if slot.slot_id == assignment.slot_id
+            )
+            for assignment in result["assignments"]
+        }
+
+        from datetime import date
+
+        date1 = date.fromisoformat(assigned_dates["E1"])
+        date2 = date.fromisoformat(assigned_dates["E2"])
+
+        gap = abs((date2 - date1).days) - 1
+
+        self.assertGreaterEqual(
+            gap, 2,
+            f"ESE exams have only {gap} complete days between them",
+        )
+
+
+    
+    def test_other_department_can_use_ese_gap_day(self):
+        students = [
+            Student("S1", "CSE", 3),
+            Student("S2", "CSE", 3),
+            Student("S3", "ECE", 3),
+        ]
+
+        exams = [
+            Exam(
+                "E1", "Math", ["S1"], 60,
+                eligible_department="CSE",
+                eligible_semester=3,
+                exam_type="ESE",
+            ),
+            Exam(
+                "E2", "DBMS", ["S2"], 60,
+                eligible_department="CSE",
+                eligible_semester=3,
+                exam_type="ESE",
+            ),
+            Exam(
+                "E3", "Electronics", ["S3"], 60,
+                eligible_department="ECE",
+                eligible_semester=3,
+                exam_type="ESE",
+            ),
+        ]
+
+        slots = [
+            TimeSlot("T1", "2026-11-01", "09:00", "10:00"),
+            TimeSlot("T2", "2026-11-02", "09:00", "10:00"),
+            TimeSlot("T3", "2026-11-04", "09:00", "10:00"),
+        ]
+
+        rooms = [Room("R1", "Room 101", 10)]
+        rules = SchedulingRules(ese_gap_days=2)
+
+        result = run_scheduling_agent(
+            exams, students, slots, rooms, rules
+        )
+
+        self.assertTrue(result["success"], result["errors"])
+
+        assigned_dates = {
+            assignment.exam_id: next(
+                slot.date
+                for slot in slots
+                if slot.slot_id == assignment.slot_id
+            )
+            for assignment in result["assignments"]
+        }
+
+        self.assertEqual(assigned_dates["E3"], "2026-11-02")
 
 
 
