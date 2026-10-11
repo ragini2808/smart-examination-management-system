@@ -525,7 +525,9 @@ class TestSchedulingAgent(unittest.TestCase):
         )
 
 
+
     
+    # Test 20: Incomplete exam eligibility must be rejected.
     def test_scheduler_rejects_incomplete_exam_eligibility(self):
         exam = Exam(
             exam_id="E_INCOMPLETE",
@@ -534,18 +536,16 @@ class TestSchedulingAgent(unittest.TestCase):
             duration_minutes=60,
             eligible_department="CSE",
             eligible_semester=None,
-            )
+        )
 
         result = generate_schedule(
             exams=[exam],
             time_slots=self.slots,
             rooms=self.rooms,
             students=self.students,
-    )
+        )
 
         self.assertIsNone(result)
-
-    
 
 
 if __name__ == "__main__":
