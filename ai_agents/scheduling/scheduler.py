@@ -11,6 +11,7 @@ from .schemas import (
     ScheduleAssignment,
     SchedulingRules,
 )
+
 from .constraints import find_conflicting_exams, validate_time_slots
 
 
@@ -64,6 +65,13 @@ def generate_schedule(
         if exam.duration_minutes <= 0:
             return None
 
+        # FIX: Explicit eligibility must contain both fields.
+        department = exam.eligible_department
+        semester = exam.eligible_semester
+
+        if (department is None) != (semester is None):
+            return None
+
         if not any(
             _slot_duration(slot) >= exam.duration_minutes
             for slot in time_slots
@@ -81,14 +89,18 @@ def generate_schedule(
     for index, exam in enumerate(exams):
         groups_for_exam = set()
 
-        if (
-            exam.eligible_department is not None
-            and exam.eligible_semester is not None
-        ):
-            groups_for_exam.add(
-                (exam.eligible_department, exam.eligible_semester)
-            )
+        department = exam.eligible_department
+        semester = exam.eligible_semester
+
+        # FIX: If either field is supplied, both must be supplied.
+        if department is not None or semester is not None:
+            if department is None or semester is None:
+                return None
+
+            groups_for_exam.add((department, semester))
+
         else:
+            # Infer groups only when neither eligibility field is set.
             for student_id in exam.enrolled_student_ids:
                 student = student_by_id.get(student_id)
 
@@ -148,7 +160,7 @@ def generate_schedule(
                 if (e, s, r) in assign_room
             ]
 
-            # The combined room capacity must be sufficient.
+            # Combined room capacity must be sufficient.
             model.add(
                 sum(
                     rooms[r].capacity * assign_room[(e, s, r)]
@@ -202,7 +214,7 @@ def generate_schedule(
 
     ordered_dates = sorted(slots_by_date)
 
-    # Enforce daily limits independently for each group.
+    # Enforce daily limits independently for each department/semester.
     groups = set()
 
     for exam_group_set in exam_groups.values():
@@ -236,9 +248,9 @@ def generate_schedule(
                     )
 
     # ESE gap constraint:
-    # Between two ESE dates for the same group, the required
-    # number of complete calendar days must remain exam-free.
-    # Other department/semester groups are not restricted.
+    # Required complete calendar days between ESE papers for the
+    # same department/semester must remain free of that group's ESEs.
+    # Other department/semester groups can still hold exams.
     if rules.ese_gap_days > 0:
         for department, semester in groups:
             group_ese_exams = [
@@ -326,4 +338,3 @@ def _slot_duration(slot: TimeSlot) -> int:
         end_hour * 60 + end_minute
         - start_hour * 60 - start_minute
     )
-
